@@ -88,7 +88,5 @@ def process_try_on():
         return jsonify({"status": "error", "message": str(e)})
 
 if __name__ == '__main__':
-    print("Python Sunucusu 5000 portunda çalışıyor...")
-   if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
