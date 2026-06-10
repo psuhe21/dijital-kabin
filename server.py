@@ -10,62 +10,85 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, allow_headers="*")
 
 # ==========================================
-# REPLICATE API AYARLARI
+# SAAS / B2B E-TİCARET API AYARLARI
 # ==========================================
-# API Token artık bulut sunucunun gizli ayarlarından (Environment Variables) çekilecek 
+VALID_API_KEYS = {
+    "lcwaikiki_secret_prod_9912": "LC Waikiki TR",
+    "trendyol_kabin_key_8841": "Trendyol Pazaryeri",
+    "test_partner_demo_1122": "Demo Test Kullanıcısı"
+}
 
-@app.route('/try-on', methods=['POST'])
+@app.route('/api/v1/try-on', methods=['POST'])
 def process_try_on():
+    # ------------------------------------------------------------------
+    # GÜVENLİK KONTROLÜ (API KEY CHECK)
+    # ------------------------------------------------------------------
+    api_key = request.headers.get('X-API-Key')
+    
+    if not api_key or api_key not in VALID_API_KEYS:
+        print("YETKİSİZ ERİŞİM DENEMESİ: Geçersiz veya eksik API Key!")
+        return jsonify({
+            "status": "error",
+            "message": "Unauthorized. Invalid or missing X-API-Key header."
+        }), 401
+
+    partner_name = VALID_API_KEYS[api_key]
+    print(f"İstek Doğrulandı! Müşteri: {partner_name}. İşlem başlatılıyor...")
+
     try:
         data = request.json
         user_image_b64 = data.get('user_image')
         clothing_src = data.get('clothing_src')
         
-        print("Fotoğraf alındı! İşlem başlatılıyor...")
+        if not user_image_b64 or not clothing_src:
+            return jsonify({
+                "status": "error",
+                "message": "Missing 'user_image' or 'clothing_src' in request body."
+            }), 400
 
         # 1. Müşteri fotoğrafını geçici olarak kaydet
         user_image_path = "temp_user.jpg"
         with open(user_image_path, "wb") as fh:
-            fh.write(base64.b64decode(user_image_b64.split(",")[1]))
+            if "," in user_image_b64:
+                user_image_b64 = user_image_b64.split(",")[1]
+            fh.write(base64.b64decode(user_image_b64))
 
-        # 2. Kıyafet Fotoğrafını Hazırla (YENİ SİSTEM)
-        garm_input = None
-        if clothing_src.startswith("http"):
-            # Eğer Firebase (URL) üzerinden geliyorsa resmi indirip geçici kaydet
-            print("Kıyafet Firebase üzerinden indiriliyor...")
-            # Kendimizi gerçek bir tarayıcı (Chrome) gibi tanıtıyoruz ki güvenlik duvarlarına takılmayalım
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8"
-            }
-            garm_response = requests.get(clothing_src, headers=headers, timeout=20)
-            garm_path = "temp_garm.jpg"
-            with open(garm_path, "wb") as f:
-                f.write(garm_response.content)
-            garm_input = open(garm_path, "rb")
-        else:
-            # Eski sistem (yerel dosya) kullanılıyorsa
-            garm_filename = clothing_src.split('/')[-1]
-            garm_input = open(garm_filename, "rb")
+        # 2. Kıyafet Fotoğrafını İndir
+        print(f"Kıyafet görseli {partner_name} sunucularından indiriliyor...")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8"
+        }
+        
+        garm_response = requests.get(clothing_src, headers=headers, timeout=20)
+        if garm_response.status_code != 200:
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to fetch clothing image. HTTP {garm_response.status_code}"
+            }), 400
+            
+        garm_path = "temp_garm.jpg"
+        with open(garm_path, "wb") as f:
+            f.write(garm_response.content)
 
-        # 3. IDM-VTON API'sine istek at
-        print("IDM-VTON sunucularına bağlanılıyor...")
+        # 3. IDM-VTON Yapay Zeka Modelini Çalıştır
+        print("IDM-VTON yapay zeka işlem hattı tetiklendi...")
         
         output = replicate.run(
             "cuuupid/idm-vton:0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
             input={
                 "human_img": open(user_image_path, "rb"), 
-                "garm_img": garm_input, # İndirilen dosyayı buraya veriyoruz
+                "garm_img": open(garm_path, "rb"),
                 "category": "upper_body",
-                "garment_des": "T-shirt",
+                "garment_des": "Clothing Item",
                 "crop": True, 
                 "steps": 30
             }
         )
 
-        print("Yapay Zeka işlemi tamamlandı!")
+        print("Yapay Zeka işlemi başarıyla tamamlandı!")
         
-        # 4. URL'yi al
+        # 4. Çıktı URL'sini Belirle
         result_image_url = ""
         if isinstance(output, list):
             result_image_url = str(output[0])
@@ -74,19 +97,20 @@ def process_try_on():
         else:
             result_image_url = str(output)
 
-        # 5. Gelen sonucu base64'e çevir Frontend'e yolla
+        # 5. Sonucu Base64'e çevir ve Frontend'e yolla
         response = requests.get(result_image_url, timeout=30)
         processed_base64 = "data:image/jpeg;base64," + base64.b64encode(response.content).decode('utf-8')
 
         return jsonify({
             "status": "success",
-            "message": "Giydirme işlemi başarılı!",
+            "partner": partner_name,
+            "message": "Giydirme işlemi başarıyla sonuçlandı.",
             "processed_image": processed_base64
         })
 
     except Exception as e:
-        print(f"HATA OLUŞTU: {e}")
-        return jsonify({"status": "error", "message": str(e)})
+        print(f"HATA OLUŞTU [{partner_name}]: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
