@@ -6,7 +6,7 @@ import replicate
 import requests
 
 app = Flask(__name__)
-# Güvenlik polisinin (CORS) özel VIP anahtarımıza (X-API-Key) izin vermesini sağlıyoruz:
+# Tüm etki alanlarından gelen isteklere ve özel başlıklara izin veriyoruz
 CORS(app, resources={r"/*": {"origins": "*"}}, allow_headers="*")
 
 # ==========================================
@@ -18,8 +18,15 @@ VALID_API_KEYS = {
     "test_partner_demo_1122": "Demo Test Kullanıcısı"
 }
 
-@app.route('/api/v1/try-on', methods=['POST'])
+# DİKKAT: Artık 'OPTIONS' (Ön Kontrol) isteklerini de kabul ediyoruz
+@app.route('/api/v1/try-on', methods=['POST', 'OPTIONS'])
 def process_try_on():
+    # ------------------------------------------------------------------
+    # TARAYICI PREFLIGHT (ÖN KONTROL) ONAYI
+    # ------------------------------------------------------------------
+    if request.method == 'OPTIONS':
+        return '', 200  # Güvenlik polisine "Geç" onayı veriyoruz
+
     # ------------------------------------------------------------------
     # GÜVENLİK KONTROLÜ (API KEY CHECK)
     # ------------------------------------------------------------------
@@ -46,14 +53,12 @@ def process_try_on():
                 "message": "Missing 'user_image' or 'clothing_src' in request body."
             }), 400
 
-        # 1. Müşteri fotoğrafını geçici olarak kaydet
         user_image_path = "temp_user.jpg"
         with open(user_image_path, "wb") as fh:
             if "," in user_image_b64:
                 user_image_b64 = user_image_b64.split(",")[1]
             fh.write(base64.b64decode(user_image_b64))
 
-        # 2. Kıyafet Fotoğrafını İndir
         print(f"Kıyafet görseli {partner_name} sunucularından indiriliyor...")
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -71,7 +76,6 @@ def process_try_on():
         with open(garm_path, "wb") as f:
             f.write(garm_response.content)
 
-        # 3. IDM-VTON Yapay Zeka Modelini Çalıştır
         print("IDM-VTON yapay zeka işlem hattı tetiklendi...")
         
         output = replicate.run(
@@ -88,7 +92,6 @@ def process_try_on():
 
         print("Yapay Zeka işlemi başarıyla tamamlandı!")
         
-        # 4. Çıktı URL'sini Belirle
         result_image_url = ""
         if isinstance(output, list):
             result_image_url = str(output[0])
@@ -97,7 +100,6 @@ def process_try_on():
         else:
             result_image_url = str(output)
 
-        # 5. Sonucu Base64'e çevir ve Frontend'e yolla
         response = requests.get(result_image_url, timeout=30)
         processed_base64 = "data:image/jpeg;base64," + base64.b64encode(response.content).decode('utf-8')
 
