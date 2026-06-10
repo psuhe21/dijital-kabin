@@ -6,7 +6,8 @@ import replicate
 import requests
 
 app = Flask(__name__)
-CORS(app)
+# Güvenlik polisinin (CORS) özel VIP anahtarımıza (X-API-Key) izin vermesini sağlıyoruz:
+CORS(app, resources={r"/*": {"origins": "*"}}, allow_headers="*")
 
 # ==========================================
 # REPLICATE API AYARLARI
