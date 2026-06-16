@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import replicate
 import os
-import base64
 
 app = Flask(__name__)
 
@@ -32,24 +31,24 @@ def process_try_on():
         data = request.json
         user_image_b64 = data.get('user_image')
         clothing_url = data.get('clothing_src')
-        category = data.get('category', 'upper_body') # 'upper_body' veya 'lower_body'
+        category = data.get('category', 'upper_body') 
 
         if not user_image_b64 or not clothing_url:
             return jsonify({"status": "error", "message": "Eksik görsel veya ürün verisi!"}), 400
 
         print(f"[{VALID_API_KEYS[api_key]}] Hızlı GPU İşlemi Başlatıldı. Kategori: {category}")
 
-        # 2. YAPAY ZEKA MODELİNE İSTEK GÖNDERME (REPLICATE GPU KULLANIMI)
-        # IDM-VTON modelini saniyeler içinde çalıştırıyoruz
+        # 2. YAPAY ZEKA MODELİNE İSTEK GÖNDERME
+        # DÜZELTME: "human_image" yerine doğru parametre olan "human_img" kullanıldı.
         output = replicate.run(
             "yisol/idm-vton:c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
             input={
-                "human_image": user_image_b64,
+                "human_img": user_image_b64,
                 "garm_img": clothing_url,
                 "garment_des": f"A piece of {category} clothing",
                 "category": category,
                 "crop": False,
-                "steps": 30, # Adım sayısını optimize ettik (kalite ve hız dengesi)
+                "steps": 30, 
                 "seed": 42
             }
         )
