@@ -1,119 +1,73 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import base64
-import os
 import replicate
-import requests
+import os
+import base64
 
 app = Flask(__name__)
-# Tüm etki alanlarından gelen isteklere ve özel başlıklara izin veriyoruz
-CORS(app, resources={r"/*": {"origins": "*"}}, allow_headers="*")
+
+# NETLIFY AYNANIZA KESİN İZİN VE CORS AYARLARI
+CORS(app, resources={r"/*": {"origins": "*"}}, allow_headers=["Content-Type", "X-API-Key", "Authorization"], methods=["GET", "POST", "OPTIONS"])
 
 # ==========================================
-# SAAS / B2B E-TİCARET API AYARLARI
+# GÜVENLİK AYARLARI
 # ==========================================
 VALID_API_KEYS = {
-    "lcwaikiki_secret_prod_9912": "LC Waikiki TR",
-    "trendyol_kabin_key_8841": "Trendyol Pazaryeri",
+    "lcwaikiki_secret_prod_9912": "Sistem TR",
+    "trendyol_kabin_key_8841": "Pazaryeri",
     "test_partner_demo_1122": "Demo Test Kullanıcısı"
 }
 
-# DİKKAT: Artık 'OPTIONS' (Ön Kontrol) isteklerini de kabul ediyoruz
 @app.route('/api/v1/try-on', methods=['POST', 'OPTIONS'])
 def process_try_on():
-    # ------------------------------------------------------------------
-    # TARAYICI PREFLIGHT (ÖN KONTROL) ONAYI
-    # ------------------------------------------------------------------
     if request.method == 'OPTIONS':
-        return '', 200  # Güvenlik polisine "Geç" onayı veriyoruz
+        return '', 200
 
-    # ------------------------------------------------------------------
-    # GÜVENLİK KONTROLÜ (API KEY CHECK)
-    # ------------------------------------------------------------------
+    # 1. GÜVENLİK KONTROLÜ
     api_key = request.headers.get('X-API-Key')
-    
     if not api_key or api_key not in VALID_API_KEYS:
-        print("YETKİSİZ ERİŞİM DENEMESİ: Geçersiz veya eksik API Key!")
-        return jsonify({
-            "status": "error",
-            "message": "Unauthorized. Invalid or missing X-API-Key header."
-        }), 401
-
-    partner_name = VALID_API_KEYS[api_key]
-    print(f"İstek Doğrulandı! Müşteri: {partner_name}. İşlem başlatılıyor...")
+        return jsonify({"status": "error", "message": "Geçersiz veya eksik API Anahtarı!"}), 401
 
     try:
         data = request.json
         user_image_b64 = data.get('user_image')
-        clothing_src = data.get('clothing_src')
-        
-        if not user_image_b64 or not clothing_src:
-            return jsonify({
-                "status": "error",
-                "message": "Missing 'user_image' or 'clothing_src' in request body."
-            }), 400
+        clothing_url = data.get('clothing_src')
+        category = data.get('category', 'upper_body') # 'upper_body' veya 'lower_body'
 
-        user_image_path = "temp_user.jpg"
-        with open(user_image_path, "wb") as fh:
-            if "," in user_image_b64:
-                user_image_b64 = user_image_b64.split(",")[1]
-            fh.write(base64.b64decode(user_image_b64))
+        if not user_image_b64 or not clothing_url:
+            return jsonify({"status": "error", "message": "Eksik görsel veya ürün verisi!"}), 400
 
-        print(f"Kıyafet görseli {partner_name} sunucularından indiriliyor...")
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8"
-        }
-        
-        garm_response = requests.get(clothing_src, headers=headers, timeout=20)
-        if garm_response.status_code != 200:
-            return jsonify({
-                "status": "error",
-                "message": f"Failed to fetch clothing image. HTTP {garm_response.status_code}"
-            }), 400
-            
-        garm_path = "temp_garm.jpg"
-        with open(garm_path, "wb") as f:
-            f.write(garm_response.content)
+        print(f"[{VALID_API_KEYS[api_key]}] Hızlı GPU İşlemi Başlatıldı. Kategori: {category}")
 
-        print("IDM-VTON yapay zeka işlem hattı tetiklendi...")
-        
+        # 2. YAPAY ZEKA MODELİNE İSTEK GÖNDERME (REPLICATE GPU KULLANIMI)
+        # IDM-VTON modelini saniyeler içinde çalıştırıyoruz
         output = replicate.run(
-            "cuuupid/idm-vton:0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
+            "yisol/idm-vton:c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
             input={
-                "human_img": open(user_image_path, "rb"), 
-                "garm_img": open(garm_path, "rb"),
-                "category": "upper_body",
-                "garment_des": "Clothing Item",
-                "crop": True, 
-                "steps": 30
+                "human_image": user_image_b64,
+                "garm_img": clothing_url,
+                "garment_des": f"A piece of {category} clothing",
+                "category": category,
+                "crop": False,
+                "steps": 30, # Adım sayısını optimize ettik (kalite ve hız dengesi)
+                "seed": 42
             }
         )
 
-        print("Yapay Zeka işlemi başarıyla tamamlandı!")
-        
-        result_image_url = ""
-        if isinstance(output, list):
-            result_image_url = str(output[0])
-        elif hasattr(output, 'url'):
-            result_image_url = output.url
+        # 3. BAŞARILI YANITI DÖNDÜRME
+        if output:
+            return jsonify({
+                "status": "success",
+                "processed_image": output, 
+                "message": "Giydirme işlemi başarıyla tamamlandı!"
+            }), 200
         else:
-            result_image_url = str(output)
-
-        response = requests.get(result_image_url, timeout=30)
-        processed_base64 = "data:image/jpeg;base64," + base64.b64encode(response.content).decode('utf-8')
-
-        return jsonify({
-            "status": "success",
-            "partner": partner_name,
-            "message": "Giydirme işlemi başarıyla sonuçlandı.",
-            "processed_image": processed_base64
-        })
+            return jsonify({"status": "error", "message": "GPU sunucusu boş yanıt döndürdü."}), 500
 
     except Exception as e:
-        print(f"HATA OLUŞTU [{partner_name}]: {e}")
+        print(f"Hata Detayı: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
