@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import replicate
 import os
+import requests
+import base64
 
 app = Flask(__name__)
 
@@ -17,12 +19,25 @@ VALID_API_KEYS = {
     "test_partner_demo_1122": "Demo Test Kullanıcısı"
 }
 
+# LCW / TRENDYOL ENGELİNİ AŞAN RESİM İNDİRİCİ FONKSİYON
+def get_image_as_base64(url):
+    try:
+        # Siteyi kandırmak için kendimizi normal bir Chrome tarayıcı gibi gösteriyoruz
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        content_type = response.headers.get('Content-Type', 'image/jpeg')
+        encoded = base64.b64encode(response.content).decode('utf-8')
+        return f"data:{content_type};base64,{encoded}"
+    except Exception as e:
+        print(f"Resim indirme hatası: {e}")
+        return None
+
 @app.route('/api/v1/try-on', methods=['POST', 'OPTIONS'])
 def process_try_on():
     if request.method == 'OPTIONS':
         return '', 200
 
-    # 1. GÜVENLİK KONTROLÜ
     api_key = request.headers.get('X-API-Key')
     if not api_key or api_key not in VALID_API_KEYS:
         return jsonify({"status": "error", "message": "Geçersiz veya eksik API Anahtarı!"}), 401
@@ -38,13 +53,18 @@ def process_try_on():
 
         print(f"[{VALID_API_KEYS[api_key]}] Hızlı GPU İşlemi Başlatıldı. Kategori: {category}")
 
-        # 2. YAPAY ZEKA MODELİNE İSTEK GÖNDERME
-        # DÜZELTME: "human_image" yerine doğru parametre olan "human_img" kullanıldı.
+        # GÜVENLİK DUVARINI AŞ: Kıyafeti indir ve şifrele
+        garm_b64 = get_image_as_base64(clothing_url)
+        
+        # Eğer bir nedenden indiremezse, eski yöntem olan doğrudan URL'yi kullan (yedek plan)
+        garm_input = garm_b64 if garm_b64 else clothing_url
+
+        # YAPAY ZEKA MODELİNE İSTEK GÖNDERME
         output = replicate.run(
             "yisol/idm-vton:c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
             input={
                 "human_img": user_image_b64,
-                "garm_img": clothing_url,
+                "garm_img": garm_input,
                 "garment_des": f"A piece of {category} clothing",
                 "category": category,
                 "crop": False,
@@ -53,7 +73,6 @@ def process_try_on():
             }
         )
 
-        # 3. BAŞARILI YANITI DÖNDÜRME
         if output:
             return jsonify({
                 "status": "success",
