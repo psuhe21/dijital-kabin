@@ -11,31 +11,22 @@ app = Flask(__name__)
 # NETLIFY AYNANIZA KESİN İZİN VE CORS AYARLARI
 CORS(app, resources={r"/*": {"origins": "*"}}, allow_headers=["Content-Type", "X-API-Key", "Authorization"], methods=["GET", "POST", "OPTIONS"])
 
-# ==========================================
-# GÜVENLİK AYARLARI
-# ==========================================
 VALID_API_KEYS = {
     "lcwaikiki_secret_prod_9912": "Sistem TR",
     "trendyol_kabin_key_8841": "Pazaryeri",
     "test_partner_demo_1122": "Demo Test Kullanıcısı"
 }
 
-# ZIRH DELİCİ: İNDİRME VE FİZİKSEL DOSYA OLUŞTURMA FONKSİYONU
 def create_temp_file(img_data):
     try:
-        # Geçici bir dosya oluştur (.jpg formatında)
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
         
         if img_data.startswith('data:image'):
-            # Kamera görüntünüzü (Base64) fiziksel dosyaya çevir
             header, encoded = img_data.split(",", 1)
             temp_file.write(base64.b64decode(encoded))
         elif img_data.startswith('http'):
-            # LCW / Trendyol kıyafetini normal bir kullanıcı gibi indir
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                'Referer': 'https://www.google.com/'
             }
             res = requests.get(img_data, headers=headers, timeout=15)
             res.raise_for_status()
@@ -68,19 +59,16 @@ def process_try_on():
         if not user_image_b64 or not clothing_url:
             return jsonify({"status": "error", "message": "Eksik görsel veya ürün verisi!"}), 400
 
-        print(f"[{VALID_API_KEYS[api_key]}] Hızlı GPU İşlemi Başlatıldı. Kategori: {category}")
-
-        # 1. GÖRSELLERİ SUNUCUYA FİZİKSEL OLARAK İNDİR (Tüm Engelleri Aşar)
         human_path = create_temp_file(user_image_b64)
         garm_path = create_temp_file(clothing_url)
 
         if not human_path or not garm_path:
-            return jsonify({"status": "error", "message": "Resimler sunucuya indirilemedi. Bağlantı engellenmiş olabilir."}), 500
+            return jsonify({"status": "error", "message": "Resimler sunucuya indirilemedi."}), 500
 
-        # 2. YAPAY ZEKA MODELİNE GERÇEK DOSYA OLARAK GÖNDERME
+        # İŞTE HATAYI ÇÖZEN O KRİTİK DÜZELTME: "yisol" YERİNE "cuuupid"
         with open(human_path, "rb") as h_file, open(garm_path, "rb") as g_file:
             output = replicate.run(
-                "yisol/idm-vton:c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
+                "cuuupid/idm-vton:c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
                 input={
                     "human_img": h_file,
                     "garm_img": g_file,
@@ -92,7 +80,6 @@ def process_try_on():
                 }
             )
 
-        # 3. İŞLEM BİTİNCE GEÇİCİ DOSYALARI SİL (Sunucu hafızası dolmasın diye)
         os.remove(human_path)
         os.remove(garm_path)
 
@@ -106,11 +93,9 @@ def process_try_on():
             return jsonify({"status": "error", "message": "GPU sunucusu boş yanıt döndürdü."}), 500
 
     except Exception as e:
-        # Hata anında da dosyaları silmeyi unutma
         if human_path and os.path.exists(human_path): os.remove(human_path)
         if garm_path and os.path.exists(garm_path): os.remove(garm_path)
         
-        print(f"Hata Detayı: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
