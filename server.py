@@ -4,6 +4,7 @@ import replicate
 import os
 import requests
 import base64
+import tempfile
 
 app = Flask(__name__)
 
@@ -19,18 +20,31 @@ VALID_API_KEYS = {
     "test_partner_demo_1122": "Demo Test Kullanıcısı"
 }
 
-# LCW / TRENDYOL ENGELİNİ AŞAN RESİM İNDİRİCİ FONKSİYON
-def get_image_as_base64(url):
+# ZIRH DELİCİ: İNDİRME VE FİZİKSEL DOSYA OLUŞTURMA FONKSİYONU
+def create_temp_file(img_data):
     try:
-        # Siteyi kandırmak için kendimizi normal bir Chrome tarayıcı gibi gösteriyoruz
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        content_type = response.headers.get('Content-Type', 'image/jpeg')
-        encoded = base64.b64encode(response.content).decode('utf-8')
-        return f"data:{content_type};base64,{encoded}"
+        # Geçici bir dosya oluştur (.jpg formatında)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        
+        if img_data.startswith('data:image'):
+            # Kamera görüntünüzü (Base64) fiziksel dosyaya çevir
+            header, encoded = img_data.split(",", 1)
+            temp_file.write(base64.b64decode(encoded))
+        elif img_data.startswith('http'):
+            # LCW / Trendyol kıyafetini normal bir kullanıcı gibi indir
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Referer': 'https://www.google.com/'
+            }
+            res = requests.get(img_data, headers=headers, timeout=15)
+            res.raise_for_status()
+            temp_file.write(res.content)
+        
+        temp_file.close()
+        return temp_file.name
     except Exception as e:
-        print(f"Resim indirme hatası: {e}")
+        print(f"Dosya oluşturma hatası: {e}")
         return None
 
 @app.route('/api/v1/try-on', methods=['POST', 'OPTIONS'])
@@ -41,6 +55,9 @@ def process_try_on():
     api_key = request.headers.get('X-API-Key')
     if not api_key or api_key not in VALID_API_KEYS:
         return jsonify({"status": "error", "message": "Geçersiz veya eksik API Anahtarı!"}), 401
+
+    human_path = None
+    garm_path = None
 
     try:
         data = request.json
@@ -53,25 +70,31 @@ def process_try_on():
 
         print(f"[{VALID_API_KEYS[api_key]}] Hızlı GPU İşlemi Başlatıldı. Kategori: {category}")
 
-        # GÜVENLİK DUVARINI AŞ: Kıyafeti indir ve şifrele
-        garm_b64 = get_image_as_base64(clothing_url)
-        
-        # Eğer bir nedenden indiremezse, eski yöntem olan doğrudan URL'yi kullan (yedek plan)
-        garm_input = garm_b64 if garm_b64 else clothing_url
+        # 1. GÖRSELLERİ SUNUCUYA FİZİKSEL OLARAK İNDİR (Tüm Engelleri Aşar)
+        human_path = create_temp_file(user_image_b64)
+        garm_path = create_temp_file(clothing_url)
 
-        # YAPAY ZEKA MODELİNE İSTEK GÖNDERME
-        output = replicate.run(
-            "yisol/idm-vton:c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
-            input={
-                "human_img": user_image_b64,
-                "garm_img": garm_input,
-                "garment_des": f"A piece of {category} clothing",
-                "category": category,
-                "crop": False,
-                "steps": 30, 
-                "seed": 42
-            }
-        )
+        if not human_path or not garm_path:
+            return jsonify({"status": "error", "message": "Resimler sunucuya indirilemedi. Bağlantı engellenmiş olabilir."}), 500
+
+        # 2. YAPAY ZEKA MODELİNE GERÇEK DOSYA OLARAK GÖNDERME
+        with open(human_path, "rb") as h_file, open(garm_path, "rb") as g_file:
+            output = replicate.run(
+                "yisol/idm-vton:c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
+                input={
+                    "human_img": h_file,
+                    "garm_img": g_file,
+                    "garment_des": f"A piece of {category} clothing",
+                    "category": category,
+                    "crop": False,
+                    "steps": 30, 
+                    "seed": 42
+                }
+            )
+
+        # 3. İŞLEM BİTİNCE GEÇİCİ DOSYALARI SİL (Sunucu hafızası dolmasın diye)
+        os.remove(human_path)
+        os.remove(garm_path)
 
         if output:
             return jsonify({
@@ -83,6 +106,10 @@ def process_try_on():
             return jsonify({"status": "error", "message": "GPU sunucusu boş yanıt döndürdü."}), 500
 
     except Exception as e:
+        # Hata anında da dosyaları silmeyi unutma
+        if human_path and os.path.exists(human_path): os.remove(human_path)
+        if garm_path and os.path.exists(garm_path): os.remove(garm_path)
+        
         print(f"Hata Detayı: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
